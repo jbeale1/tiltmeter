@@ -4,7 +4,7 @@
 // 8-Dec-2024 J.Beale
 // I2C address 0x48 : AD7747 24-bit capacitance sensor chip
 
-#define VERSION "Version 0.11 2024-12-08 jpb"
+#define VERSION "Version 0.12 2024-12-10 jpb"
 #include <Wire.h>
 
 const byte AD7747_ADDRESS = 0x48;  // address of device
@@ -85,6 +85,12 @@ const uint8_t DefaultRegisters[] = {0, 0, 0, 0, 0, 0, 0, DATA_CAP_SETUP, DATA_VT
                                             DATA_CAPDACA, DATA_CAPDACB, DATA_CAP_OFFH, DATA_CAP_OFFL, 0, 0, 0, 0
                                            };
 
+float cFilt;   // LP-filtered capacitance reading
+float tFilt; // LP-filtered temperature reading
+float fP = 0.01; // low-pass filter fraction
+
+long n;            // count of how many readings so far
+double x,mean,delta,m2,variance,stdev;  // to calculate standard deviation
 
 // ==================================================================================
 void setup() {
@@ -95,9 +101,20 @@ void setup() {
   pinMode(RDY0, INPUT_PULLUP); // signal /RDY from AD7747
 
   Serial.begin(115200);
+
+  //showRegisters();  // display the register values
+
   delay(2000);
-  Serial.println("Pi pico I2C test");
+  for (int i=0;i<3;i++) {
+    digitalWrite (PICO_LED, HIGH);
+    delay(2000);
+    digitalWrite (PICO_LED, LOW);
+    delay(1000);
+  }
+  Serial.println("Tilt Monitor AD7747 readout");
   Serial.println(VERSION);
+  findDevice();
+  showRegisters();
 
   AD774X_Reset();
   if (I2C_State != 0) {
@@ -109,11 +126,24 @@ void setup() {
   // AD774X_Write_Single_Register(ADR_CFG,       0xA1);  // continuous, /RDY = 5.38 Hz
   AD774X_Write_Single_Register(ADR_CFG,       0x39);  // continuous, slow cap rate /RDY: 4.17 Hz
 
+  delay(1000);
+  while (!digitalRead(RDY0)) {}   // wait for /RDY signal to go high
+  while (digitalRead(RDY0)) {}   // wait for /RDY signal to go low: data ready
+
+  AD774X_Read_Registers(ADR_CAP_DATAH, RTxBuff, 6);
+  cFilt = ConvertCapData();   // initialize without LP filter
+  tFilt = ConvertTempData();
+
   // load AD7747 registers to correct initial values
   //for (uint8_t i = 0; i<8; i++) {
   //  RTxBuff[i] = DefaultRegisters[i+ADR_CAP_SETUP];
   //}
   //AD774X_Write_Registers(ADR_CAP_SETUP, RTxBuff, 8);
+
+  // standard deviation vars
+  n = 0;     // have not made any ADC readings yet
+  mean = 0; // start off with running mean at zero
+  m2 = 0;
 }
 
 // read each AD7747 register and display its value in hex
@@ -172,24 +202,56 @@ void findDevice() {
 } 
 
 // --------------------------------------------------------------
+
+unsigned int SAMPLES = 41;
+//unsigned int dr = 4;  // decimation ratio (raw reads per print data)
+//unsigned int rc = 0;  // read counter
 void loop() {
-
-  while (digitalRead(RDY0)) {}   // wait for /RDY signal to go low
-
-  digitalWrite (PICO_LED, HIGH);
-  //delay(500);
+  //digitalWrite (PICO_LED, HIGH);
   //showRegisters();  // display the register values
-  //delay(100);
 
-  unsigned long msec = millis();
-  float sec = msec/1000.0;
-  Serial.print(sec,1); // print elapsed time in seconds
-  Serial.print(", ");
+
+  while (!digitalRead(RDY0)) {}   // wait for /RDY signal to go high if not already
+  while (digitalRead(RDY0)) {}   // wait for /RDY signal to go low
   AD774X_Read_Registers(ADR_CAP_DATAH, RTxBuff, 6);
-  SerialPrintData();
+  float cRaw = ConvertCapData();
+  float tRaw = ConvertTempData();
 
-  while (!digitalRead(RDY0)) {}   // wait for /RDY signal to go high
-  digitalWrite (PICO_LED, LOW);
+  // --------------- standard deviation calculation ------------------------
+  // from http://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+  x = cRaw;
+  n++;
+  delta = x - mean;
+  mean += delta/n;
+  m2 += (delta * (x - mean));
+  // --------------- standard deviation calculation ------------------------
+
+  cFilt = (1-fP)*cFilt + fP*cRaw;  // do low-pass filter
+  tFilt = (1-fP)*tFilt + fP*tRaw;
+
+  if (n == SAMPLES){
+    variance = m2/(n);  // (n-1):Sample Variance  (n): Population Variance
+    stdev = sqrt(variance);  // Calculate standard deviation
+
+    unsigned long msec = millis();
+    float sec = msec/1000.0;
+    Serial.print(sec,1); // print elapsed time in seconds
+    Serial.print(", ");
+    Serial.print(cFilt,7);
+    Serial.print(",");
+    Serial.print(mean,7);
+    Serial.print(",");
+    Serial.print(stdev*1000.0,4);
+    Serial.print(",");
+    Serial.println(tFilt,3);
+    n = 0;     // reaset number of readings
+    mean = 0; // restart with running mean at zero
+    m2 = 0;
+
+  }
+  //SerialPrintData();
+
+  // digitalWrite (PICO_LED, LOW);
 
 } // end loop()
 
