@@ -4,7 +4,7 @@
 // 8-Dec-2024 J.Beale
 // I2C address 0x48 : AD7747 24-bit capacitance sensor chip
 
-#define VERSION "Version 0.12 2024-12-10 jpb"
+#define VERSION "Version 0.13 2024-12-11 jpb"
 #include <Wire.h>
 
 const byte AD7747_ADDRESS = 0x48;  // address of device
@@ -111,14 +111,17 @@ void setup() {
     digitalWrite (PICO_LED, LOW);
     delay(1000);
   }
-  Serial.println("Tilt Monitor AD7747 readout");
+  Serial.println("sec, cFilt, cAvg, cStd, degC");
+  Serial.print("# Tilt Monitor AD7747 readout \n# ");
   Serial.println(VERSION);
-  findDevice();
-  showRegisters();
+  //findDevice();
+  //showRegisters();
 
   AD774X_Reset();
   if (I2C_State != 0) {
-    Serial.print(F("\r\nAD774X not responding !"));
+    Serial.println("\n# FAIL no response from AD7747");
+  } else {
+    Serial.println("# connected to device.");
   }
   AD774X_Write_Single_Register(ADR_CAP_SETUP, 0xA0);  // CAP setup
   AD774X_Write_Single_Register(ADR_VT_SETUP,  0x81);  // VT setup
@@ -203,7 +206,7 @@ void findDevice() {
 
 // --------------------------------------------------------------
 
-unsigned int SAMPLES = 41;
+unsigned int SAMPLES = 84;
 //unsigned int dr = 4;  // decimation ratio (raw reads per print data)
 //unsigned int rc = 0;  // read counter
 void loop() {
