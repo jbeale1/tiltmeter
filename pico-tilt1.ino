@@ -4,14 +4,21 @@
 // 8-Dec-2024 J.Beale
 // I2C address 0x48 : AD7747 24-bit capacitance sensor chip
 
-#define VERSION "Version 0.13 2024-12-11 jpb"
+#define VERSION "Version 0.13a 2024-12-13 jpb"
 #include <Wire.h>
 
+#define ARNANO  // Arduino Nano board
 const byte AD7747_ADDRESS = 0x48;  // address of device
 const byte SDA0 = 20;  // I2C SDA on Pico GPIO 20 (physical board pin 26)
 const byte SCL0 = 21;  // I2C SCL on Pico GPIO 21 (physical board pin 27)
-const byte RDY0 = 16;  // chip /RDY signal, GPIO16 (board pin 21)
-const byte PICO_LED = 25;
+#ifdef ARNANO  // Arduino Nano board
+  const byte BOARD_LED = 13;  // Arduino board
+  const byte RDY0 = 9;  // chip /RDY signal, Arduino pin D9
+#else // Pi Pico board
+  const byte BOARD_LED = 25;
+  const byte RDY0 = 16;  // chip /RDY signal, GPIO16 (Pico board pin 21)
+#endif
+
 // ----------------------------------------------------------------------------------
 const uint8_t AD774X_ADDRESS = 0x48;// AD774X I2C address
 
@@ -94,9 +101,9 @@ double x,mean,delta,m2,variance,stdev;  // to calculate standard deviation
 
 // ==================================================================================
 void setup() {
-  pinMode (PICO_LED, OUTPUT);
-  Wire.setSDA(SDA0);
-  Wire.setSCL(SCL0);
+  pinMode (BOARD_LED, OUTPUT);
+  // Wire.setSDA(SDA0);  // comment out for Arduino board
+  // Wire.setSCL(SCL0);
   Wire.begin();
   pinMode(RDY0, INPUT_PULLUP); // signal /RDY from AD7747
 
@@ -106,9 +113,9 @@ void setup() {
 
   delay(2000);
   for (int i=0;i<3;i++) {
-    digitalWrite (PICO_LED, HIGH);
+    digitalWrite (BOARD_LED, HIGH);
     delay(2000);
-    digitalWrite (PICO_LED, LOW);
+    digitalWrite (BOARD_LED, LOW);
     delay(1000);
   }
   Serial.println("sec, cFilt, cAvg, cStd, degC");
