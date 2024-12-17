@@ -1,16 +1,27 @@
 // Arduino for Pi Pico: read out AD7747 sensor
 // Uses Philhower Pico board package v4.3.1
 // and modified parts of https://github.com/jankop2/Arduino-AD7747
-// 8-Dec-2024 J.Beale
+// 17-Dec-2024 J.Beale
 // I2C address 0x48 : AD7747 24-bit capacitance sensor chip
+// I2C address 0x68 : MCP3421 18-bit ADC chip (separate I2C bus for lower noise)
 
-#define VERSION "Version 0.13a 2024-12-13 jpb"
+#define VERSION "Version 0.13c 2024-12-17 jpb"
 #include <Wire.h>
+#include <MCP342x1.h>  // MCP3421 connected on 2nd I2C bus
 
-#define ARNANO  // Arduino Nano board
+// #define ARNANO  // Arduino Nano board
+
 const byte AD7747_ADDRESS = 0x48;  // address of device
 const byte SDA0 = 20;  // I2C SDA on Pico GPIO 20 (physical board pin 26)
 const byte SCL0 = 21;  // I2C SCL on Pico GPIO 21 (physical board pin 27)
+
+const byte SDA1 = 14;  // I2C SDA ch1 on Pico GPIO14 (pin 19)
+const byte SCL1 = 15;  // I2C SCL ch1 on Pico GPIO15 (pin 20)
+
+uint8_t MCP3421_address = 0x68;  // I2C 18-bit ADC chip MCP3421
+MCP342x1 adc = MCP342x1(MCP3421_address);
+
+
 #ifdef ARNANO  // Arduino Nano board
   const byte BOARD_LED = 13;  // Arduino board
   const byte RDY0 = 9;  // chip /RDY signal, Arduino pin D9
@@ -19,6 +30,7 @@ const byte SCL0 = 21;  // I2C SCL on Pico GPIO 21 (physical board pin 27)
   const byte RDY0 = 16;  // chip /RDY signal, GPIO16 (Pico board pin 21)
 #endif
 
+//const uint8_t MCP3421_ADDRESS = 0x68
 // ----------------------------------------------------------------------------------
 const uint8_t AD774X_ADDRESS = 0x48;// AD774X I2C address
 
@@ -102,9 +114,34 @@ double x,mean,delta,m2,variance,stdev;  // to calculate standard deviation
 // ==================================================================================
 void setup() {
   pinMode (BOARD_LED, OUTPUT);
-  // Wire.setSDA(SDA0);  // comment out for Arduino board
-  // Wire.setSCL(SCL0);
+
+#ifdef ARNANO  // Arduino Nano board
+#else // Pi Pico board
+
+  Wire.setSDA(SDA0);  // I2C bus with AD7747 sensor
+  Wire.setSCL(SCL0);
+  Wire1.setSDA(SDA1); // I2C bus with MCP3421 ADC
+  Wire1.setSCL(SCL1);
+  Wire1.begin();
+
+    // Reset ADC device
+  MCP342x1::generalCallReset();
+  delay(1); // MC342x needs 300us to settle, wait 1ms
+  
+  // Check device present
+  Wire1.requestFrom(MCP3421_address, (uint8_t)1);
+  if (!Wire1.available()) {
+    Serial.print("No ADC device found at address ");
+    Serial.println(MCP3421_address, HEX);
+    while (1)
+      ;
+  }
+
+#endif
+
+
   Wire.begin();
+
   pinMode(RDY0, INPUT_PULLUP); // signal /RDY from AD7747
 
   Serial.begin(115200);
@@ -118,7 +155,11 @@ void setup() {
     digitalWrite (BOARD_LED, LOW);
     delay(1000);
   }
-  Serial.println("sec, cFilt, cAvg, cStd, degC");
+
+  // findDevice0(); 
+  // findDevice1();
+
+  Serial.println("sec, cFilt, cAvg, cStd, degC, tValue");
   Serial.print("# Tilt Monitor AD7747 readout \n# ");
   Serial.println(VERSION);
   //findDevice();
@@ -173,20 +214,16 @@ void showRegisters() {
     Serial.println();  // return cursor to left after printout
 }
 
-// scan I2C bus for active devices
-void findDevice() { 
+// scan I2C bus 0 for active devices
+void findDevice0() { 
   byte error, address;
   int nDevices;
-  Serial.println("Scanning...");
+  Serial.println("Scanning I2C 0...");
   nDevices = 0;
   for(address = 1; address < 127; address++ )
   {
-    // The i2c_scanner uses the return value of
-    // the Write.endTransmisstion to see if
-    // a device did acknowledge to the address.
     Wire.beginTransmission(address);
-    error = Wire.endTransmission();
- 
+    error = Wire.endTransmission(); 
     if (error == 0)
     {
       Serial.print("I2C device found at address 0x");
@@ -203,12 +240,42 @@ void findDevice() {
       Serial.println(address,HEX);
     }    
   }
-
-
   if (nDevices == 0)
-    Serial.println("No I2C devices found\n");
+    Serial.println("No I2C devices found on I2C Bus0\n");
   else
-    Serial.println("done");
+    Serial.println("I2C 0 scan done");
+} 
+
+// scan I2C bus 1 for active devices
+void findDevice1() { 
+  byte error, address;
+  int nDevices;
+  Serial.println("Scanning I2C 1...");
+  nDevices = 0;
+  for(address = 1; address < 127; address++ )
+  {
+    Wire1.beginTransmission(address);
+    error = Wire1.endTransmission(); 
+    if (error == 0)
+    {
+      Serial.print("I2C device found at address 0x");
+      if (address<16)
+        Serial.print("0");
+      Serial.println(address,HEX);
+      nDevices++;
+    }
+    else if (error==4)
+    {
+      Serial.print("Unknown error at address 0x");
+      if (address<16)
+        Serial.print("0");
+      Serial.println(address,HEX);
+    }    
+  }
+  if (nDevices == 0)
+    Serial.println("No I2C devices found on I2C Bus1\n");
+  else
+    Serial.println("I2C 1 scan done");
 } 
 
 // --------------------------------------------------------------
@@ -243,6 +310,24 @@ void loop() {
     variance = m2/(n);  // (n-1):Sample Variance  (n): Population Variance
     stdev = sqrt(variance);  // Calculate standard deviation
 
+
+    // read temperature from MCP3421 ADC
+    long tValue = 0;
+    float tempC = -999;
+    MCP342x1::Config status;
+    // Initiate a conversion; convertAndRead() will wait until it can be read
+    uint8_t err = adc.convertAndRead(MCP342x1::channel1, MCP342x1::oneShot,
+            MCP342x1::resolution18, MCP342x1::gain4,
+            1000000, tValue, status);
+    if (err) {
+      Serial.print("Convert error: ");
+      Serial.println(err);
+    }
+    else {
+      tempC = 100.0 * tValue * (15.625e-6) / 4; // 18-bit mode, gain of 4, 10 mV/deg.C
+    }
+
+
     unsigned long msec = millis();
     float sec = msec/1000.0;
     Serial.print(sec,1); // print elapsed time in seconds
@@ -253,8 +338,10 @@ void loop() {
     Serial.print(",");
     Serial.print(stdev*1000.0,4);
     Serial.print(",");
-    Serial.println(tFilt,3);
-    n = 0;     // reaset number of readings
+    Serial.print(tFilt,3);
+    Serial.print(",");
+    Serial.println(tempC,3);
+    n = 0;     // reset number of readings
     mean = 0; // restart with running mean at zero
     m2 = 0;
 
@@ -264,4 +351,3 @@ void loop() {
   // digitalWrite (PICO_LED, LOW);
 
 } // end loop()
-
