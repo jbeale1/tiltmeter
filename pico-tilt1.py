@@ -1,12 +1,12 @@
 # Micropython / Pi Pico Read AD7747 Cap-sensor chip via I2C
 # uses firmware RPI_PICO_W-20240602-v1.23.0.uf2
-# J.Beale 22-Dec-2024
+# J.Beale 18-Jan-2024
 
 import machine
 import time
 import struct
 
-VERSION = "Pico AD7747 v0.3 22-Dec-2024 JPB"
+VERSION = "Pico AD7747 v0.4 18-Jan-2025 JPB"
 # -------------------------------------
 
 SCL1 = 21 # I2C Clock: Pico GPIO pin GP21
@@ -57,6 +57,15 @@ ADR_VOLT_GAINL = 18  # factory calibration
 # Val: 07 00 00 00 00 00 00 00 00 03 a0 00 00 80 00 63 2c 5b 81
 # ---------------------------------------------------
 
+# ===============================================================================
+# main program starts here
+
+avgN = 8  # average this many readings before output
+boxN = 10 # boxcar-avg this many readings
+
+bufC = [0] * boxN  # capacitance data buffer for boxcar average
+ci = 0  # index into bufC[]
+
 led = machine.Pin(25, machine.Pin.OUT)  # Onboard LED is connected to GPIO 25
 dTime = 0.5
 for i in range(3):
@@ -64,7 +73,6 @@ for i in range(3):
     time.sleep(dTime)
     led.value(0)  
     time.sleep(dTime*3) # turn onboard LED off
-
 
 AD7747_ready = machine.Pin(RDY1, machine.Pin.IN)  # /RDY signal from AD7747
 
@@ -74,8 +82,14 @@ setupData = bytearray([0xa0, 0x81, 0x0e, 0xa1, 0x00,0x00,0x80,0x00 ])  # value t
 i2c.writeto_mem(address1, ADR_CAP_SETUP, setupData)
 time.sleep(1)
 
-print("pF, degC")
+print("avgPf, pF, degC, delta, i-delta")
 print("# " + VERSION)
+
+n = 0 # how many readings so far
+pF = 0 # sum/avg of capacitance in pF
+degC = 0 # sum/avg of internal chip temp in deg.C
+cMin = 999  # minimum observed capacitance reading
+cMax = -999 # max observed reading
 
 while True:    
     while not AD7747_ready.value(): # wait for /RDY signal to go high
@@ -84,8 +98,26 @@ while True:
         pass
 
     rData = i2c.readfrom_mem(address1, ADR_CAP_DATAH, 6)  # read 3 cap and 3 temp bytes
-    cDat = convertCapData(rData[:3]) # get capacitance reading in pF
-    degC = convertTempData(rData[3:6]) # get chip temp in deg. C
+    rawpF = convertCapData(rData[:3]) # get capacitance reading in pF
+    if (rawpF < cMin):
+        cMin = rawpF
+    if (rawpF > cMax):
+        cMax = rawpF
+    pF += rawpF
+    degC += convertTempData(rData[3:6]) # get chip temp in deg. C
+    n += 1
 
-    # hex_string = ' '.join(['{:02x}'.format(b) for b in rData])
-    print("%.6f, %.3f" % (cDat, degC))
+    if (n >= avgN):
+        pF = pF / n
+        degC = degC / n
+        bufC[ci] = pF
+        ci += 1
+        if (ci >= boxN):
+            ci = 0
+        pfMean = sum(bufC) / boxN
+        delta = (pfMean - pF)*1000
+        iDelta = (cMax - cMin) * 1000
+        print("%.6f, %.6f, %.3f, %.2f, %.1f" % (pfMean, pF, degC, delta, iDelta))
+        n = 0
+        cMin = 999  # minimum observed capacitance reading
+        cMax = -999 # max observed reading
