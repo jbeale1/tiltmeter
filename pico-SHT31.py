@@ -1,5 +1,4 @@
 # Read data from SHT31 Temp/RH sensor and print
-# runs on Pi Pico using RPI_PICO-20241129-v1.24.1.uf2
 # 31-Jan-2025 jpb
 
 from machine import Pin, I2C
@@ -29,7 +28,8 @@ def getTRH():
 
     #i2c.writeto_mem(device_address, register_address, bytes([data]))
 
-    i2c.writeto_mem(sht31_addr, 0x2C, bytes([0x06]))
+    #i2c.writeto_mem(sht31_addr, 0x2C, bytes([0x06]))
+    i2c.writeto_mem(sht31_addr, 0x24, bytes([0x00]))
     time.sleep(0.5)
     # SHT31 address, 0x44(68)
     # Read data back from 0x00(00), 6 bytes
